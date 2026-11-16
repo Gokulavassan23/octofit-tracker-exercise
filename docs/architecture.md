@@ -28,26 +28,21 @@ OctoFit Tracker is a three-tier application for a school fitness program. The st
 
 ## Implementation decisions
 
-### Presentation tier decision
-**React components with state management**: Each component (Activities, Teams, Leaderboard, Workouts) uses React hooks (`useState`, `useEffect`) to manage loading/data/error states independently. Components fetch from `/api/*` endpoints using a shared `getJson()` client. Each component renders four conditional states: (1) loading with `role="status"`, (2) error with `role="alert"`, (3) empty state with meaningful message, (4) data list/table. No third-party state management (Context/Redux) needed for this scope.
+Record your plan here before editing code.
 
-### Logic tier decision
-**Express services with synchronous validation**: The `octofitService.ts` module implements six functions: `listActivities()`, `createActivity()`, `listTeams()`, `createTeam()`, `getLeaderboard()`, and `suggestWorkouts()`. Each function handles input validation, database queries, and error handling. Input validation returns `400` status with descriptive error for invalid references or missing fields (never 500 from cast errors). Services compose Mongoose queries; routes handle HTTP response codes and error forwarding to middleware.
+- Presentation tier decision: React components use hooks (`useState`, `useEffect`) to manage loading/data/error states independently. Each component renders four conditional states: (1) loading with `role="status"`, (2) error with `role="alert"`, (3) empty state with meaningful message, (4) data list/table. Components fetch from `/api/*` using shared `getJson()` client. No third-party state management (Context/Redux) needed for this scope.
 
-### Data tier decision
-**Mongoose schemas with required field validation**: All four models (User, Team, Activity, Workout) are updated to enforce required fields at schema level using `{ required: true }` for mandatory properties. This prevents invalid documents and ensures seed data idempotency. No custom validators needed; schema-level constraints are sufficient for the contract.
+- Logic tier decision: Express services in `octofitService.ts` implement six functions (`listActivities()`, `createActivity()`, `listTeams()`, `createTeam()`, `getLeaderboard()`, `suggestWorkouts()`) with synchronous validation. Input validation returns 400 status with descriptive error for invalid references or missing fields; never 500 from cast errors. Services compose Mongoose queries; routes handle HTTP response codes and error forwarding to middleware.
 
-### Activity tracking approach
-**Computed points per activity**: When `POST /api/activities` is called, the service validates userId/teamId exist (checking against database), calculates `points` from `minutes` (1:1 ratio for simplicity), sets `occurredAt` to current date, and stores the activity. Validation returns `400` if userId/teamId are malformed IDs, non-existent records, or missing required fields (type, minutes). GET returns all activities with user/team/type/minutes/points/occurredAt fields populated.
+- Data tier decision: Mongoose schemas enforce required fields at schema level using `{ required: true }` for mandatory properties on User, Team, Activity, and Workout models. This prevents invalid documents and ensures seed data idempotency. No custom validators needed; schema-level constraints are sufficient for the contract.
 
-### Team management approach
-**Minimal team creation with member array**: `POST /api/teams` validates that `name` and `mascot` are provided, returns `400` if name is missing, and stores the team with an empty `members` array (populated via upsert by seed script). GET returns all teams with their name, mascot, and member ObjectIds. No member add/remove endpoints implemented (out of scope for this exercise).
+- Activity tracking approach: When `POST /api/activities` is called, service validates userId/teamId existence and format, calculates `points` from `minutes` (1:1 ratio), sets `occurredAt` to current date, and stores the activity. Validation returns 400 if userId/teamId are malformed, non-existent, or required fields (type, minutes) are missing. GET returns all activities with user/team/type/minutes/points/occurredAt populated.
 
-### Leaderboard approach
-**MongoDB aggregation pipeline**: `GET /api/leaderboard` runs an aggregation that groups Activity documents by `team`, sums `points` per team, looks up the Team document to get `teamName`, sorts by `totalPoints` descending, and adds a 1-based `rank` field. Returns array of `{ teamName, totalPoints, rank }` objects ordered by points highest-first. Empty teams (no activities) are excluded.
+- Team management approach: `POST /api/teams` validates that `name` and `mascot` are provided, returns 400 if name missing, stores team with empty `members` array populated later via seed upsert. GET returns all teams with name, mascot, and member ObjectIds. No member add/remove endpoints implemented (out of scope).
 
-### Workout suggestions approach
-**Goal and activity pattern matching**: `GET /api/workouts/suggestions/:userEmail` finds the User by email (returns 404 if not found), fetches recent activities for that user, identifies the dominant focus (user's fitnessGoal or most common activity type), queries Workouts matching that focus, and returns suggestions ordered with a human-readable `reason` field (e.g., "You've been running—build endurance" or "Your goal is strength training"). Hardcoded for "mona@example.com" in tests; returns first matching workout as suggestion.
+- Leaderboard approach: `GET /api/leaderboard` runs MongoDB aggregation grouping Activity documents by `team`, summing `points` per team, looking up Team names, sorting by `totalPoints` descending, and adding 1-based `rank` field. Returns `{ teamName, totalPoints, rank }` objects ordered highest-first. Empty teams (no activities) excluded.
+
+- Workout suggestions approach: `GET /api/workouts/suggestions/:userEmail` finds User by email (returns 404 if not found), matches Workouts by user's `fitnessGoal` or recent activity types, and returns suggestions with human-readable `reason` field explaining the match (e.g., "You've been running—build endurance"). Returns first matching workout as primary suggestion.
 
 ## Test plan
 
