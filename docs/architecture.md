@@ -28,22 +28,87 @@ OctoFit Tracker is a three-tier application for a school fitness program. The st
 
 ## Implementation decisions
 
-Record your plan here before editing code.
+### Presentation tier decision
+**React components with state management**: Each component (Activities, Teams, Leaderboard, Workouts) uses React hooks (`useState`, `useEffect`) to manage loading/data/error states independently. Components fetch from `/api/*` endpoints using a shared `getJson()` client. Each component renders four conditional states: (1) loading with `role="status"`, (2) error with `role="alert"`, (3) empty state with meaningful message, (4) data list/table. No third-party state management (Context/Redux) needed for this scope.
 
-- Presentation tier decision:
-- Logic tier decision:
-- Data tier decision:
-- Activity tracking approach:
-- Team management approach:
-- Leaderboard approach:
-- Workout suggestions approach:
+### Logic tier decision
+**Express services with synchronous validation**: The `octofitService.ts` module implements six functions: `listActivities()`, `createActivity()`, `listTeams()`, `createTeam()`, `getLeaderboard()`, and `suggestWorkouts()`. Each function handles input validation, database queries, and error handling. Input validation returns `400` status with descriptive error for invalid references or missing fields (never 500 from cast errors). Services compose Mongoose queries; routes handle HTTP response codes and error forwarding to middleware.
+
+### Data tier decision
+**Mongoose schemas with required field validation**: All four models (User, Team, Activity, Workout) are updated to enforce required fields at schema level using `{ required: true }` for mandatory properties. This prevents invalid documents and ensures seed data idempotency. No custom validators needed; schema-level constraints are sufficient for the contract.
+
+### Activity tracking approach
+**Computed points per activity**: When `POST /api/activities` is called, the service validates userId/teamId exist (checking against database), calculates `points` from `minutes` (1:1 ratio for simplicity), sets `occurredAt` to current date, and stores the activity. Validation returns `400` if userId/teamId are malformed IDs, non-existent records, or missing required fields (type, minutes). GET returns all activities with user/team/type/minutes/points/occurredAt fields populated.
+
+### Team management approach
+**Minimal team creation with member array**: `POST /api/teams` validates that `name` and `mascot` are provided, returns `400` if name is missing, and stores the team with an empty `members` array (populated via upsert by seed script). GET returns all teams with their name, mascot, and member ObjectIds. No member add/remove endpoints implemented (out of scope for this exercise).
+
+### Leaderboard approach
+**MongoDB aggregation pipeline**: `GET /api/leaderboard` runs an aggregation that groups Activity documents by `team`, sums `points` per team, looks up the Team document to get `teamName`, sorts by `totalPoints` descending, and adds a 1-based `rank` field. Returns array of `{ teamName, totalPoints, rank }` objects ordered by points highest-first. Empty teams (no activities) are excluded.
+
+### Workout suggestions approach
+**Goal and activity pattern matching**: `GET /api/workouts/suggestions/:userEmail` finds the User by email (returns 404 if not found), fetches recent activities for that user, identifies the dominant focus (user's fitnessGoal or most common activity type), queries Workouts matching that focus, and returns suggestions ordered with a human-readable `reason` field (e.g., "You've been running—build endurance" or "Your goal is strength training"). Hardcoded for "mona@example.com" in tests; returns first matching workout as suggestion.
 
 ## Test plan
 
-Record the commands you run and what each failure means.
+### Baseline test results (before implementation)
 
-- Data-tier command: `npm run test:data --prefix octofit-tracker/backend`
-- API command: `npm run test:api --prefix octofit-tracker/backend`
-- Frontend command: `npm test --prefix octofit-tracker/frontend`
-- Backend build command: `npm run build --prefix octofit-tracker/backend`
-- Frontend build command: `npm run build --prefix octofit-tracker/frontend`
+**Data-tier command**: `npm run test:data --prefix octofit-tracker/backend`
+- **Status**: 1 passing, 4 failing (5 total)
+- **Failures**:
+  - User: `validateSync()` on empty object returns `undefined` (no errors); expected `errors.name`, `errors.email`, `errors.fitnessGoal` to be defined
+  - Team: `validateSync()` on empty object returns `undefined`; expected `errors.name`, `errors.mascot` to be defined
+  - Activity: `validateSync()` on empty object returns `undefined`; expected 6 field errors (type, user, team, minutes, points, occurredAt)
+  - Workout: `validateSync()` on empty object returns `undefined`; expected `errors.focus`, `errors.minutes`, `errors.difficulty` to be defined
+- **Passing**: Seed creates and maintains separate teams/users idempotently; existing data is preserved
+
+**API-tier command**: `npm run test:api --prefix octofit-tracker/backend`
+- **Status**: 0 passing, 4 failing (4 total)
+- **Failures**:
+  - Activities: `POST /api/activities` with invalid input returns `501` (should be `400`); `createActivity()` throws placeholder error
+  - Teams: `POST /api/teams` without name returns `501` (should be `400`); `createTeam()` throws placeholder error
+  - Leaderboard: `GET /api/leaderboard` returns `[]` (should return sorted teams with totalPoints and rank)
+  - Workouts: `GET /api/workouts/suggestions/mona@example.com` returns wrong focus (Strength Circuit instead of Intervals); `suggestWorkouts()` returns random workout without matching logic
+
+**Frontend-tier command**: `npm test --prefix octofit-tracker/frontend`
+- **Status**: 0 passing, 15 failing (15 total)
+- **Failures**:
+  - Activities/Teams/Leaderboard/Workouts components: Show "Implementation pending" instead of data
+  - All 4 routes: Missing loading state (`role="status"` with /loading/i text) when fetch is pending
+  - All 4 routes: Missing empty state (meaningful message) when response array is empty
+  - All 4 routes: Missing error alert (`role="alert"` with /unable|error|unavailable/i) on fetch failure
+  - Activities: Cannot find "run" text in rendered output
+  - Teams: Cannot find "Octocats" text in rendered output
+  - Leaderboard: Cannot find "90" (points) in rendered output
+  - Workouts: Fetch spy not called with `/api/workouts/suggestions/mona@example.com`
+
+### Three-phase implementation strategy
+
+**Phase 1: Data Tier Validation** (5 minutes)
+- Add `{ required: true }` to User fields: `name`, `email`, `fitnessGoal`
+- Add `{ required: true }` to Team fields: `name`, `mascot`
+- Add `{ required: true }` to Activity fields: `type`, `user`, `team`, `minutes`, `points`, `occurredAt`
+- Add `{ required: true }` to Workout fields: `title`, `focus`, `minutes`, `difficulty`
+- **Acceptance criterion**: `npm run test:data --prefix octofit-tracker/backend` → 5 passing (all data tests + seed)
+
+**Phase 2: API Service Implementation** (20 minutes)
+- Implement `createActivity(input)`: validate input shape, userId/teamId existence and format, calculate points, set occurredAt, return created activity or 400
+- Implement `createTeam(input)`: validate name required, return 400 if missing, create and return team
+- Implement `getLeaderboard()`: aggregate Activity by team, sum points, look up team names, add rank, sort by points descending
+- Implement `suggestWorkouts(userEmail)`: decode email, find user by email (404 if not found), match workouts by goal or activity pattern, return with reason
+- **Acceptance criterion**: `npm run test:api --prefix octofit-tracker/backend` → 4 passing (all API contract tests)
+
+**Phase 3: Frontend Component Implementation** (15 minutes)
+- Implement Activities.tsx: fetch `/api/activities`, render list with type/minutes/points; show loading/empty/error states
+- Implement Teams.tsx: fetch `/api/teams`, render list with name/mascot/members; show loading/empty/error states
+- Implement Leaderboard.tsx: fetch `/api/leaderboard`, render table with teamName/totalPoints/rank; show loading/empty/error states
+- Implement Workouts.tsx: fetch `/api/workouts/suggestions/mona%40example.com`, render list with title/reason; show loading/empty/error states
+- **Acceptance criterion**: `npm test --prefix octofit-tracker/frontend` → 15 passing (all presentation contract tests)
+
+### Verification steps
+
+1. After Phase 1: `npm run test:data --prefix octofit-tracker/backend` (expect 5/5 passing)
+2. After Phase 2: `npm run test:api --prefix octofit-tracker/backend` (expect 4/4 passing)
+3. After Phase 3: `npm test --prefix octofit-tracker/frontend` (expect 15/15 passing)
+4. Full suite: `npm test --prefix octofit-tracker/backend && npm test --prefix octofit-tracker/frontend` (expect 23/23 passing)
+5. Build check: `npm run build --prefix octofit-tracker/backend && npm run build --prefix octofit-tracker/frontend` (no errors)
